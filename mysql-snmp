@@ -23,7 +23,7 @@
 
 use strict;
 
-my $VERSION = "v1.1_01";
+my $VERSION = "v1.2_01";
 $VERSION = eval $VERSION;
 
 ## Packages ##
@@ -35,7 +35,7 @@ use Data::Dumper;
 
 # Math::BigInt reverts to perl only
 # automatically if GMP is not installed
-use Math::BigInt try => 'GMP';
+use Math::BigInt lib => 'GMP';
 
 sub new {
    bless {}, shift;
@@ -55,6 +55,61 @@ sub parse_innodb_status {
         'innodb_tables_in_use'  => 0,
         'innodb_lock_structs'   => 0,
         'innodb_lock_wait_secs' => 0,
+        'pending_normal_aio_reads'  => 0,
+        'pending_normal_aio_writes' => 0,
+        'pending_ibuf_aio_reads'    => 0,
+        'pending_aio_log_ios'       => 0,
+        'pending_aio_sync_ios'      => 0,
+        'pending_log_flushes'       => 0,
+        'pending_buf_pool_flushes'  => 0,
+        'file_reads'                => 0,
+        'file_writes'               => 0,
+        'file_fsyncs'               => 0,
+        'ibuf_inserts'              => 0,
+        'ibuf_merged'               => 0,
+        'ibuf_merges'               => 0,
+        'log_bytes_written'         => 0,
+        'unflushed_log'             => 0,
+        'log_bytes_flushed'         => 0,
+        'pending_log_writes'        => 0,
+        'pending_chkp_writes'       => 0,
+        'log_writes'                => 0,
+        'pool_size'                 => 0,
+        'free_pages'                => 0,
+        'database_pages'            => 0,
+        'modified_pages'            => 0,
+        'pages_read'                => 0,
+        'pages_created'             => 0,
+        'pages_written'             => 0,
+        'queries_inside'            => 0,
+        'queries_queued'            => 0,
+        'read_views'                => 0,
+        'rows_inserted'             => 0,
+        'rows_updated'              => 0,
+        'rows_deleted'              => 0,
+        'rows_read'                 => 0,
+        'innodb_transactions'       => 0,
+        'unpurged_txns'             => 0,
+        'history_list'              => 0,
+        'current_transactions'      => 0,
+        'hash_index_cells_total'    => 0,
+        'hash_index_cells_used'     => 0,
+        'total_mem_alloc'           => 0,
+        'additional_pool_alloc'     => 0,
+        'last_checkpoint'           => 0,
+        'uncheckpointed_bytes'      => 0,
+        'ibuf_used_cells'           => 0,
+        'ibuf_free_cells'           => 0,
+        'ibuf_cell_count'           => 0,
+        'adaptive_hash_memory'      => 0,
+        'page_hash_memory'          => 0,
+        'dictionary_cache_memory'   => 0,
+        'file_system_memory'        => 0,
+        'lock_system_memory'        => 0,
+        'recovery_system_memory'    => 0,
+        'thread_hash_memory'        => 0,
+        'innodb_sem_waits'          => 0,
+        'innodb_sem_wait_time_ms'   => 0
     );
     my $flushed_to;
     my $innodb_lsn;
@@ -63,6 +118,7 @@ sub parse_innodb_status {
     my @spin_rounds;
     my @os_waits;
     my $txn_seen = 0;
+    my $merged_op_seen = 0;
 
     foreach my $line (@$lines) {
         my @row = split(/ +/, $line);
@@ -79,6 +135,12 @@ sub parse_innodb_status {
             push(@os_waits,   $self->tonum($row[5]));
             push(@os_waits,   $self->tonum($row[11]));
         }
+        elsif ($line =~ /seconds the semaphore:/) {
+           # --Thread 907205 has waited at handler/ha_innodb.cc line 7156 for 1.00 seconds the semaphore:
+           $status{'innodb_sem_waits'} += 1;
+           $status{'innodb_sem_wait_time_ms'} += $self->tonum($row[9]) * 1000;
+        }
+
         # TRANSACTIONS
         elsif ($line =~ m/Trx id counter/) {
             # The beginning of the TRANSACTIONS section: start counting
@@ -161,12 +223,26 @@ sub parse_innodb_status {
            $status{'ibuf_used_cells'} = $self->tonum($row[2]);
            $status{'ibuf_free_cells'} = $self->tonum($row[6]);
            $status{'ibuf_cell_count'} = $self->tonum($row[9]);
+           if ($line =~ m/merges$/) {
+             # newer innodb plugin
+             $status{'ibuf_merges'}  = $self->tonum($row[10]);
+           }
         }
         elsif ($line =~ m/ merged recs, /) {
            # 19817685 inserts, 19817684 merged recs, 3552620 merges
            $status{'ibuf_inserts'} = $self->tonum($row[0]);
            $status{'ibuf_merged'}  = $self->tonum($row[2]);
            $status{'ibuf_merges'}  = $self->tonum($row[5]);
+        }
+        elsif ($line =~ m/merged operations:/) {
+           #merged operations:
+           # insert 0, delete mark 0, delete 0
+           $merged_op_seen = 1;
+        }
+        elsif ($merged_op_seen && $line =~ m/ insert \d+, delete mark/) {
+           #merged operations:
+           # insert 0, delete mark 0, delete 0
+           $status{'ibuf_inserts'} = $self->tonum($1);
         }
         elsif ($line =~ m/^Hash table size /) {
            # In some versions of InnoDB, the used cells is omitted.
@@ -397,7 +473,9 @@ my @types = (
     'Gauge32',   'Gauge32',   'Gauge32',   'Gauge32',      # 129 - 132
     'Gauge32',   'Gauge32',   'Gauge32',   'Gauge32',      # 133 - 136
     'Counter64', 'Counter64', 'Counter64', 'Counter64',    # 137 - 140
-    'Counter64', 'Counter64', 'Counter64',                 # 141 - 143
+    'Counter64', 'Counter64', 'Counter64', 'Counter64',    # 141 - 144
+    'Counter64', 'Counter64', 'Counter64', 'Counter64',    # 145 - 148
+    'Counter64', 'Counter64',                              # 149 - 150
 );
 
 my @newkeys = (
@@ -472,7 +550,10 @@ my @newkeys = (
     'myAdaptiveHashMemory',       'myPageHashMemory',            # 137 - 138
     'myDictionaryCacheMemory',    'myFileSystemMemory',          # 139 - 140
     'myLockSystemMemory',         'myRecoverySystemMemory',      # 141 - 142
-    'myThreadHashMemory',                                        # 143 - 143
+    'myThreadHashMemory',         'myInnoDBSemWaits',            # 143 - 144
+    'myInnoDBSemWaitTime',        'myKeyBufBytesUnflushed',      # 145 - 146
+    'myKeyBufBytesUsed',          'myKeyBufferSize',             # 147 - 148
+    'myInnoDBRowLockTime',        'myInnoDBRowLockWaits',        # 149 - 150
 );
 
 my @oldkeys = (
@@ -547,7 +628,10 @@ my @oldkeys = (
     'adaptive_hash_memory',       'page_hash_memory',              # 137 - 138
     'dictionary_cache_memory',    'file_system_memory',            # 139 - 140
     'lock_system_memory',         'recovery_system_memory',        # 141 - 142
-    'thread_hash_memory',                                          # 143 - 143
+    'thread_hash_memory',         'innodb_sem_waits',              # 143 - 144
+    'innodb_sem_wait_time_ms',    'key_buf_bytes_unflushed',       # 145 - 146
+    'key_buf_bytes_used',         'key_buffer_size',               # 147 - 148
+    'Innodb_row_lock_time',       'Innodb_row_lock_waits',         # 149 - 150
 );
 
 run() unless caller();
@@ -575,6 +659,13 @@ sub max {
     my ($a, $b) = @_;
     return $a if $a > $b;
     return $b;
+}
+
+sub bigint($) {
+    my $str = shift;
+    return Math::BigInt->bzero() if !$str;
+    return new Math::BigInt $1 if $str =~ m/(\d+)/;
+    return Math::BigInt->bzero();
 }
 
 # This function has been translated from PHP to Perl from the
@@ -665,12 +756,19 @@ sub fetch_mysql_data {
 
                 # Older versions of MySQL may not have the File_size column in the
                 # results of the command.
-                if (exists($newrow{'file_size'})) {
+                if (exists($newrow{'file_size'}) && $newrow{'file_size'} > 0) {
                     push(@binlogs, $newrow{'file_size'});
                 }
                 else {
                     last;
                 }
+            }
+        }
+
+        if (scalar @binlogs) {
+            $status{'binary_log_space'} = 0;
+            foreach my $log (@binlogs) {
+                $status{'binary_log_space'} += $log;
             }
         }
 
@@ -715,9 +813,14 @@ sub fetch_mysql_data {
                 $status{$key} = $out->{$key};
             }
 
-            $status{'unflushed_log'} = max($status{'unflushed_log'}, $status{'innodb_log_buffer_size'});
+            if (defined($status{'unflushed_log'})) {
+                # it seems that unflushed_log is sometimes not defined...
+                $status{'unflushed_log'} = max($status{'unflushed_log'}, $status{'innodb_log_buffer_size'});
+            }
         }
 
+        $status{'key_buf_bytes_used'} = bigint($status{'key_buffer_size'})->bsub(bigint($status{'Key_blocks_unused'})->bmul($status{'key_cache_block_size'}));
+        $status{'key_buf_bytes_unflushed'} = bigint($status{'Key_blocks_not_flushed'})->bmul(bigint($status{'key_cache_block_size'}));
 
         # Get SHOW PROCESSLIST and aggregate it by state, then add it to the array
         # too.
@@ -726,10 +829,10 @@ sub fetch_mysql_data {
             foreach my $row (@$result) {
                 my %newrow = map {lc($_) => $row->{$_}} keys %$row;
                 my $state = $newrow{'State'};
-                if ( defined($state) ) {
+                if ( !defined($state) ) {
                     $state = 'NULL';
                 }
-                if ( $state == '' ) {
+                if ( $state eq '' ) {
                     $state = 'none';
                 }
                 $state = lc($state);
@@ -740,13 +843,6 @@ sub fetch_mysql_data {
                 else {
                     $status{"State_other"} += 1;
                 }
-            }
-        }
-
-        if (scalar @binlogs) {
-            $status{'binary_log_space'} = 0;
-            foreach my $log (@binlogs) {
-                $status{'binary_log_space'} += $log;
             }
         }
 
@@ -882,10 +978,10 @@ sub my_snmp_handler {
         }
 
         if ($mode == MODE_GETNEXT) {
-            if ($oid < $lowestOid) {
+            if (NetSNMP::OID::compare($oid, $lowestOid) < 0) {
                 set_value($request, $lowestOid, $request_info);
             }
-            elsif ($oid < $highestOid) #request is somewhere in our range, so return first one after it
+            elsif (NetSNMP::OID::compare($oid, $highestOid) <= 0) #request is somewhere in our range, so return first one after it
             {
                 my $lasti = 0;
                 my $i = 0;
@@ -895,10 +991,14 @@ sub my_snmp_handler {
                 do {
                     $oidToUse = $ks[$i];
                     $i++;
-                } while (NetSNMP::OID::compare($oid, $oidToUse) > -1 and $i <= scalar @ks);
+                } while (NetSNMP::OID::compare($oid, $oidToUse) > -1 and $i < scalar @ks);
 
                 #got one to return
                 if (defined $oidToUse) {
+                    if (NetSNMP::OID::compare($oid, $oidToUse) == 0) {
+                        dolog(LOG_DEBUG, "GETNEXT $oid == $oidToUse, no next, returning nothing") if ($opt{verbose});
+                        next;
+                    }
                     dolog(LOG_DEBUG, "Next oid to $oid is $oidToUse") if ($opt{verbose});
                     while (!set_value($request, $oidToUse, $request_info)) {
                         # got not value, we need to get the next oid
